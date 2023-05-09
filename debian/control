@@ -1,0 +1,20 @@
+Source: rshim-user-space
+Section: admin
+Priority: optional
+Maintainer: dann frazier <dannf@debian.org>
+Build-Depends: debhelper-compat (= 13),
+ libfuse-dev,
+ libpci-dev,
+ libusb-1.0-0-dev,
+ pkg-config,
+Standards-Version: 4.6.2
+
+Package: rshim
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Architecture: any
+Homepage: https://github.com/Mellanox/rshim-user-space
+Description: Userspace (fuse) host driver for Mellanox BlueField devices
+ This is a userspace driver that provides host access to BlueField PCIe
+ devices. It can be used to push boot streams (usually to flash a new OS
+ image), access a virtual console, provide a virtual network interface
+ connecting the BlueField device and its host, and a debug interface.

@@ -1,0 +1,5 @@
+rshim-user-space (2.0.7+debian-1) UNRELEASED; urgency=low
+
+  * Initial release (Closes: #1035760).
+
+ -- dann frazier <dannf@debian.org>  Tue, 09 May 2023 16:33:07 -0600
