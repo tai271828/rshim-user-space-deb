@@ -85,7 +85,8 @@ enum {
 enum {
   RSHIM_PCIE_RST_REPLY_NONE,
   RSHIM_PCIE_RST_REPLY_ACK,
-  RSHIM_PCIE_RST_REPLY_NACK
+  RSHIM_PCIE_RST_REPLY_NACK,
+  RSHIM_PCIE_RST_START_ACK,
 };
 
 /* Reset type stored in scratchpad6. */
@@ -94,6 +95,9 @@ enum {
   RSHIM_PCIE_RST_TYPE_DPU_RESET,
   RSHIM_PCIE_RST_TYPE_NIC_RESET
 };
+
+/* Min delay in seconds after RSHIM_PCIE_RST_START_ACK */
+#define RSHIM_PCIE_RST_START_MIN_DELAY    2
 
 /* Interrupt information between NIC_FW and rshim driver. */
 typedef union {
@@ -754,7 +758,7 @@ static void rshim_pcie_intr(rshim_pcie_t *dev)
 {
   rshim_pcie_intr_info_t info = {.word = 0};
   rshim_backend_t *bd = &dev->bd;
-  int rc, drop_mode;
+  int rc, drop_mode, delay;
   time_t t;
 
   /* Add some protection for interrupt flooding. */
@@ -787,7 +791,8 @@ static void rshim_pcie_intr(rshim_pcie_t *dev)
     (info.rst_type == RSHIM_PCIE_RST_TYPE_NIC_RESET) ? "NIC" :
     ((info.rst_type == RSHIM_PCIE_RST_TYPE_DPU_RESET) ? "DPU" : ""));
 
-  if (info.rst_reply == RSHIM_PCIE_RST_REPLY_NONE) {
+  switch (info.rst_state) {
+  case RSHIM_PCIE_RST_STATE_REQUEST:
     RSHIM_INFO("NIC reset ACK\n");
     info.rst_reply = RSHIM_PCIE_RST_REPLY_ACK;
     dev->nic_reset = true;
@@ -796,21 +801,22 @@ static void rshim_pcie_intr(rshim_pcie_t *dev)
                     info.word, RSHIM_REG_SIZE_8B);
     sleep(RSHIM_PCIE_NIC_RESET_WAIT);
     dev->nic_reset = false;
-  }
+    break;
 
-  rc = bd->read_rshim(bd, RSHIM_CHANNEL, bd->regs->scratchpad6,
-                      &info.word, RSHIM_REG_SIZE_8B);
-  if (rc || RSHIM_BAD_CTRL_REG(info.word)) {
-    RSHIM_WARN("Failed to read irq request\n");
-    goto intr_done;
-  }
-
-  if (info.rst_state == RSHIM_PCIE_RST_STATE_ABORT) {
+  case RSHIM_PCIE_RST_STATE_ABORT:
     RSHIM_INFO("NIC reset ABORT\n");
     info.word &= 0xFFFFFFFFUL;
     bd->write_rshim(bd, RSHIM_CHANNEL, bd->regs->scratchpad6,
                     info.word, RSHIM_REG_SIZE_8B);
-  } else if (info.rst_type == RSHIM_PCIE_RST_TYPE_DPU_RESET) {
+    break;
+
+  case RSHIM_PCIE_RST_STATE_START:
+    RSHIM_INFO("NIC reset START\n");
+
+    info.rst_reply = RSHIM_PCIE_RST_START_ACK;
+    bd->write_rshim(bd, RSHIM_CHANNEL, bd->regs->scratchpad6,
+                    info.word, RSHIM_REG_SIZE_8B);
+
     /*
      * Both NIC and ARM reset.
      * - Set drop_mode to prevent further read/write;
@@ -821,8 +827,15 @@ static void rshim_pcie_intr(rshim_pcie_t *dev)
     drop_mode = bd->drop_mode;
     bd->drop_mode = 1;
     rshim_fifo_reset(bd);
-    sleep(2);
+    delay = (info.rst_downtime * 10 + 999) / 1000;
+    if (delay < RSHIM_PCIE_RST_START_MIN_DELAY)
+      delay = RSHIM_PCIE_RST_START_MIN_DELAY;
+    sleep(delay);
     bd->drop_mode = drop_mode;
+    break;
+
+  default:
+    break;
   }
 
   if (!bd->drop_mode)
