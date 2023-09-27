@@ -1,6 +1,7 @@
 rshim-user-space (2.0.11+debian-1) UNRELEASED; urgency=medium
 
   * New upstream release.
+  * Add a watch file.
 
  -- dann frazier <dannf@debian.org>  Wed, 27 Sep 2023 10:05:22 -0600
 
