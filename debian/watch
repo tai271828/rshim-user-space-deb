@@ -1,5 +1,8 @@
 version=4
-opts="searchmode=plain,\
-filenamemangle=s%v?@ANY_VERSION@%@PACKAGE@-$1.tar.xz%" \
-https://api.github.com/repos/Mellanox/rshim-user-space/releases?per_page=50 \
-https://api.github.com/repos/[^/]+/[^/]+/tarball/rshim-?@ANY_VERSION@
+# Upstream does not keep the release page of their github up-to-date, so let us
+# use the tag api instead.
+opts="\
+    searchmode=plain, \
+    filenamemangle=s/.*\/([^\/]*)$/$1.tar.gz/" \
+    https://api.github.com/repos/Mellanox/@PACKAGE@/tags \
+    https://api.github.com/repos/Mellanox/rshim-user-space/tarball/refs/tags/rshim-?@ANY_VERSION@
