@@ -1,3 +1,12 @@
+rshim-user-space (2.0.12+debian-1) unstable; urgency=medium
+
+  * Add debian/gbp.conf
+  * d/watch: scan tags Github API instead of releases
+  * New upstream version 2.0.12+debian
+  * d/control: update Maintainer and Uploaders
+
+ -- Taihsiang Ho (tai271828) <e@tai271828.me>  Fri, 27 Oct 2023 18:53:02 +0200
+
 rshim-user-space (2.0.11+debian-1) unstable; urgency=medium
 
   * New upstream release.
