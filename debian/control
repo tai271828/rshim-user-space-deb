@@ -1,7 +1,7 @@
 Source: rshim-user-space
 Section: admin
 Priority: optional
-Maintainer: Taihsiang Ho <e@tai271828.me>
+Maintainer: Taihsiang Ho (tai271828) <e@tai271828.me>
 Uploaders: dann frazier <dannf@debian.org>
 Build-Depends: debhelper-compat (= 13),
  libfuse-dev,
