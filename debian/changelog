@@ -1,3 +1,18 @@
+rshim-user-space (2.0.12+debian-1) unstable; urgency=medium
+
+  [ Taihsiang Ho (tai271828) ]
+  * New upstream version 2.0.12+debian
+  * Add debian/gbp.conf
+  * d/watch: scan tags Github API instead of releases
+  * d/control: update Maintainer and Uploaders
+  * d/control: resolve some lintian warnings
+
+  [ Liming Sun ]
+  * BF3: Add UPTIME display in seconds
+  * Update version to 2.0.12
+
+ -- Taihsiang Ho (tai271828) <e@tai271828.me>  Tue, 14 Nov 2023 13:04:25 +0100
+
 rshim-user-space (2.0.11+debian-1) unstable; urgency=medium
 
   * New upstream release.
