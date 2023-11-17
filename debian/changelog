@@ -7,7 +7,7 @@ rshim-user-space (2.0.12+debian-1) unstable; urgency=medium
   * d/control: update Maintainer and Uploaders
   * d/control: resolve some lintian warnings
 
- -- Taihsiang Ho (tai271828) <e@tai271828.me>  Tue, 14 Nov 2023 13:04:25 +0100
+ -- dann frazier <dannf@debian.org>  Fri, 17 Nov 2023 13:21:28 -0700
 
 rshim-user-space (2.0.11+debian-1) unstable; urgency=medium
 
