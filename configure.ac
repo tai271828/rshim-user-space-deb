@@ -2,7 +2,7 @@
 # Copyright (C) 2019 Mellanox Technologies. All Rights Reserved.
 #
 
-AC_INIT([rshim], [2.0.12])
+AC_INIT([rshim], [2.0.20])
 AC_CONFIG_AUX_DIR(config)
 AM_INIT_AUTOMAKE([-Wall -Werror foreign])
 AC_LANG(C)
@@ -85,8 +85,12 @@ AS_IF([test "x$build_fuse" = "xyes"], [
   if test $backend = freebsd; then
     AC_CHECK_LIB(cuse, cuse_dev_create)
   else
-    PKG_CHECK_MODULES(fuse, fuse, [], [AC_MSG_ERROR([Can't find fuse])])
+    PKG_CHECK_MODULES(fuse, fuse, [], PKG_CHECK_MODULES(fuse, fuse3, [use_fuse3=yes], [AC_MSG_ERROR([Can't find fuse])]))
+  if test $use_fuse3 = yes; then
     AC_SUBST(CPPFLAGS, "$CPPFLAGS -DFUSE_USE_VERSION=30")
+  else
+    AC_SUBST(CPPFLAGS, "$CPPFLAGS -DFUSE_USE_VERSION=29")
+  fi
 fi
 ])
 
