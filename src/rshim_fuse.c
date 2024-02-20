@@ -19,8 +19,13 @@
 #include <sys/timerfd.h>
 
 #ifdef __linux__
+#if FUSE_USE_VERSION >= 30
+#include <fuse3/cuse_lowlevel.h>
+#include <fuse3/fuse_opt.h>
+#else
 #include <fuse/cuse_lowlevel.h>
 #include <fuse/fuse_opt.h>
+#endif
 #include <unistd.h>
 #elif defined(__FreeBSD__)
 #include <termios.h>
@@ -795,6 +800,7 @@ static int rshim_fuse_misc_write(struct cuse_dev *cdev, int fflags,
 #endif
   int i, rc = 0, value = 0, mac[6], vlan[2] = {0}, old_value;
   char opn[RSHIM_YU_BOOT_RECORD_OPN_SIZE + 1] = "";
+  uint64_t val64 = 0;
   char key[32];
 
   if (!bd) {
@@ -838,16 +844,17 @@ static int rshim_fuse_misc_write(struct cuse_dev *cdev, int fflags,
 
     pthread_mutex_lock(&bd->mutex);
     old_value = (int)bd->drop_mode;
-    bd->drop_mode = !!value;
-    if (bd->drop_mode == old_value) {
+    value = !!value;
+    if (value == old_value) {
       pthread_mutex_unlock(&bd->mutex);
       goto done;
     }
 
-    if (bd->enable_device) {
-      if (bd->enable_device(bd, bd->drop_mode ? false : true))
-        bd->drop_mode = 1;
-    }
+    bd->drop_mode = 0;
+    if (bd->enable_device && bd->enable_device(bd, value ? false : true))
+      bd->drop_mode = 1;
+    else
+      bd->drop_mode = value;
 
     if (bd->drop_mode)
       bd->drop_pkt = 1;
@@ -943,6 +950,15 @@ static int rshim_fuse_misc_write(struct cuse_dev *cdev, int fflags,
     if (sscanf(p, "%16s", opn) != 1)
       goto invalid;
     rshim_set_opn(bd, opn, RSHIM_YU_BOOT_RECORD_OPN_SIZE);
+  } else if (!strcmp(key, "DEBUG_CODE")) {
+    if (sscanf(p, " 0x%lx", &val64) != 1)
+      goto invalid;
+    pthread_mutex_lock(&bd->mutex);
+    rc = bd->write_rshim(bd, RSHIM_CHANNEL, bd->regs->scratchpad1,
+                         val64, RSHIM_REG_SIZE_8B);
+    if (!rc)
+      bd->debug_code = val64;
+    pthread_mutex_unlock(&bd->mutex);
   } else {
 invalid:
 #ifdef __linux__
@@ -1299,6 +1315,7 @@ int rshim_fuse_init(rshim_backend_t *bd)
   for (i = 0; i < RSH_DEV_TYPES; i++) {
 #ifdef __linux__
     static const char * const argv[] = {"./rshim", "-f"};
+    int multithreaded = 0;
 
     name = rshim_dev_minor_names[i];
 
@@ -1320,7 +1337,7 @@ int rshim_fuse_init(rshim_backend_t *bd)
       continue;
     bd->fuse_session[i] = cuse_lowlevel_setup(sizeof(argv)/sizeof(char *),
                                       (char **)argv,
-                                      &ci, ops[i], NULL, bd);
+                                      &ci, ops[i], &multithreaded, bd);
     if (!bd->fuse_session[i]) {
       RSHIM_ERR("Failed to setup CUSE %s\n", name);
       return -1;

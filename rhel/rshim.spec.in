@@ -54,6 +54,33 @@ via the virtual console or network interface.
 %{_mandir}/man8/rshim.8.gz
 
 %changelog
+* Fri Feb 16 2024 Liming Sun <limings@nvidia.com> - 2.0.20
+- rshim_pci: adjust delay time for nic_fw reset
+- bfb-install: Exit on "Linux up"
+
+* Wed Jan 10 2024 Liming Sun <limings@nvidia.com> - 2.0.19
+- Fix incorrect console message drop
+- Allow runtime debug code for DK cards
+
+* Thu Dec 14 2023 Liming Sun <limings@nvidia.com> - 2.0.18
+- Clear scratchpad1 register when setting drop_mode
+
+* Wed Nov 22 2023 Liming Sun <limings@nvidia.com> - 2.0.17
+- bfb-install: Fix duplicate output
+
+* Thu Nov 16 2023 Liming Sun <limings@nvidia.com> - 2.0.16
+- Remove fuse build dependency
+
+* Tue Nov 14 2023 Liming Sun <limings@nvidia.com> - 2.0.15
+- Add BFB completion condition for enhanced NIC mode
+
+* Fri Nov 10 2023 Liming Sun <limings@nvidia.com> - 2.0.14
+- Fix 9f19cfb4a75687ae
+
+* Wed Nov 08 2023 Liming Sun <limings@nvidia.com> - 2.0.13
+- Several robust fixes
+- Add fuse3 support
+
 * Mon Oct 23 2023 Liming Sun <limings@nvidia.com> - 2.0.12
 - BF3: Add UPTIME display in seconds
 
