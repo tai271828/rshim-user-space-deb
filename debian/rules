@@ -1,5 +1,7 @@
 #!/usr/bin/make -f
-export DEB_CFLAGS_MAINT_APPEND = -D_FILE_OFFSET_BITS=64
+ifeq ($(DEB_HOST_ARCH),armhf)
+	export DEB_CFLAGS_MAINT_APPEND = -D_FILE_OFFSET_BITS=64
+endif
 
 %:
 	dh $@
