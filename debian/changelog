@@ -1,3 +1,11 @@
+rshim-user-space (2.0.20+debian-2) unstable; urgency=medium
+
+  * debian/rules: update CFLAG for FTBFS on armhf (Closes: #1064920)
+  * debian/rules: conditionally append for armhf arch
+  * debian/rules: apply the best practice of DEB_BUILD
+
+ -- Taihsiang Ho (tai271828) <e@tai271828.me>  Sat, 20 Apr 2024 19:26:49 +0200
+
 rshim-user-space (2.0.20+debian-1) unstable; urgency=medium
 
   [ Taihsiang Ho (tai271828) ]
