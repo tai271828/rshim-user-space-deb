@@ -1,3 +1,9 @@
+rshim-user-space (2.0.20+debian-3) unstable; urgency=medium
+
+  * debian/rules: conditionally append for i386 arch (Closes: #1064920)
+
+ -- Taihsiang Ho (tai271828) <e@tai271828.me>  Thu, 09 May 2024 00:18:46 +0200
+
 rshim-user-space (2.0.20+debian-2) unstable; urgency=medium
 
   * debian/rules: update CFLAG for FTBFS on armhf (Closes: #1064920)
