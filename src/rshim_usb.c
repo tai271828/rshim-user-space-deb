@@ -337,13 +337,14 @@ static void rshim_usb_fifo_read_callback(struct libusb_transfer *urb)
 {
   rshim_usb_t *dev = urb->user_data;
   rshim_backend_t *bd = &dev->bd;
+  bool lock;
 
   RSHIM_DBG("fifo_read_callback: %s urb completed, status %d, "
             "actual length %d, intr buf 0x%x\n",
             dev->read_urb_is_intr ? "interrupt" : "read",
             urb->status, urb->actual_length, (int)*dev->intr_buf);
 
-  pthread_mutex_lock(&bd->ringlock);
+  lock = (pthread_mutex_trylock(&bd->ringlock) == 0) ? true : false;
 
   bd->spin_flags &= ~RSH_SFLG_READING;
 
@@ -419,7 +420,8 @@ static void rshim_usb_fifo_read_callback(struct libusb_transfer *urb)
     break;
   }
 
-  pthread_mutex_unlock(&bd->ringlock);
+  if (lock)
+    pthread_mutex_unlock(&bd->ringlock);
 }
 
 static void rshim_usb_fifo_read(rshim_usb_t *dev, char *buffer, size_t count)
@@ -777,6 +779,7 @@ static int rshim_usb_probe_one(libusb_context *ctx, libusb_device *usb_dev,
 
     bd = &dev->bd;
     strcpy(bd->dev_name, dev_name);
+    bd->type = RSH_BACKEND_USB;
     bd->drop_mode = (rshim_drop_mode >= 0) ? rshim_drop_mode : 0;
     bd->read = rshim_usb_backend_read;
     bd->write = rshim_usb_backend_write;

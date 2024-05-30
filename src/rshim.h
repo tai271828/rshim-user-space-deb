@@ -100,8 +100,20 @@ extern int rshim_pcie_enable_uio;
 
 #define BF3_MAX_BOOT_FIFO_SIZE 8192 /* bytes */
 
+/*
+ * Possible error code during resetting, which can be used to check against
+ * registers with known values.
+ */
 #define RSHIM_BAD_CTRL_REG(v) \
   (((v) == 0xbad00acce55) || ((v) == (uint64_t)-1) || ((v) == 0xbadacce55))
+
+/* Backend type. */
+typedef enum {
+  RSH_BACKEND_NONE,
+  RSH_BACKEND_USB,
+  RSH_BACKEND_PCIE,
+  RSH_BACKEND_PCIE_LF
+} rshim_backend_type_t;
 
 /* Sub-device types. */
 enum {
@@ -279,6 +291,10 @@ struct rshim_backend {
   uint32_t peer_vlan_set : 1;     /* A flag to set vlan IDs. */
   uint32_t drop_mode : 1;         /* A flag to drop all input/output. */
   uint32_t skip_boot_reset : 1;   /* Skip SW_RESET while pushing boot stream. */
+  uint32_t locked_mode : 1;       /* Secure NIC mode Management. No RSHIM HW access */
+
+  /* type. */
+  rshim_backend_type_t type;
 
   /* reference count. */
   volatile int ref;
@@ -580,6 +596,7 @@ static inline void rshim_usb_poll(bool blocking)
 #ifdef HAVE_RSHIM_PCIE
 int rshim_pcie_init(void);
 int rshim_pcie_lf_init(void);
+void rshim_pcie_check(rshim_backend_t *bd);
 #else
 static inline int rshim_pcie_init(void)
 {
@@ -589,6 +606,11 @@ static inline int rshim_pcie_init(void)
 static inline int rshim_pcie_lf_init(void)
 {
   return -1;
+}
+
+static inline void rshim_pcie_check(rshim_backend_t *bd)
+{
+  (void)bd;
 }
 #endif
 
@@ -608,5 +630,11 @@ int rshim_set_opn(rshim_backend_t *bd, const char *opn, int len);
 
 /* Check whether rshim backend is accessible or not. */
 int rshim_access_check(rshim_backend_t *bd);
+
+/* Sync up with the peer side. */
+int rshim_fifo_sync(rshim_backend_t *bd, bool drop_rx);
+
+/* Enable or disable drop mode */
+int rshim_set_drop_mode(rshim_backend_t *bd, int value);
 
 #endif /* _RSHIM_H */
