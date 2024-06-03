@@ -54,6 +54,45 @@ via the virtual console or network interface.
 %{_mandir}/man8/rshim.8.gz
 
 %changelog
+* Fri May 17 2024 Liming Sun <limings@nvidia.com> - 2.0.31
+- bf3/pcie_lf: support register read/write via /dev/rshim0/rshim
+- Only poll/check locked mode for PCIe backend
+- Remove workaround support for BF2 A0 chip
+
+* Mon May 13 2024 Liming Sun <limings@nvidia.com> - 2.0.30
+- pcie: Adjust default reset delay to 3 seconds
+- Avoid polling blocked status during reset
+- Disable installation of rshim on host by default
+
+* Tue Apr 30 2024 Liming Sun <limings@nvidia.com> - 2.0.29
+- Some robust fixes for rshim over USB
+- Lower log level for register read errors as it's normal during reset
+
+* Thu Apr 25 2024 Penghe Geng <pgeng@nvidia.com> - 2.0.28
+- Secure NIC Mode: Prevent running simultaneously on both bmc and host
+
+* Fri Apr 12 2024 Penghe Geng <pgeng@nvidia.com> - 2.0.27
+- bfb-install: Fix incorrect IP address resolution for multi-hop routing
+
+* Fri Apr 12 2024 Liming Sun <limings@nvidia.com> - 2.0.26
+- rshim_pcie: set PCIE bit in scratchpad6
+- Revert semantics of --reverse-nc
+
+* Fri Apr 05 2024 Liming Sun <limings@nvidia.com> - 2.0.25
+- Avoid a race of rshim ownership during bfb push
+
+* Thu Apr 04 2024 Liming Sun <limings@nvidia.com> - 2.0.24
+- DROP_MODE: sync-up the Rx FIFO when clearing DROP_MODE
+
+* Tue Apr 02 2024 Liming Sun <limings@nvidia.com> - 2.0.23
+- Add some robust fixes for the DROP_MODE
+
+* Fri Mar 22 2024 Penghe Geng <pgeng@nvidia.com> - 2.0.22
+- bfb-install: add support for remote rshim update; add speed optimizations
+
+* Tue Mar 19 2024 Penghe Geng <pgeng@nvidia.com> - 2.0.21
+- rshim_pci: output Secure NIC mode status in misc file
+
 * Fri Feb 16 2024 Liming Sun <limings@nvidia.com> - 2.0.20
 - rshim_pci: adjust delay time for nic_fw reset
 - bfb-install: Exit on "Linux up"

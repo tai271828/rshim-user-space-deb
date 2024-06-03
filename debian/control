@@ -8,7 +8,7 @@ Build-Depends: debhelper-compat (= 13),
  libpci-dev,
  libusb-1.0-0-dev,
  pkg-config,
-Standards-Version: 4.6.2
+Standards-Version: 4.7.0
 Vcs-Browser: https://salsa.debian.org/bluefield-team/rshim-user-space
 Vcs-Git: https://salsa.debian.org/bluefield-team/rshim-user-space.git
 

@@ -630,27 +630,6 @@ int rshim_mmio_read32(rshim_backend_t *bd, uintptr_t addr, uint32_t *data)
   }
 }
 
-static bool rshim_is_livefish(rshim_backend_t *bd)
-{
-  uint32_t yu_boot = 0, boot_status;
-  int rc;
-
-  /* No need to check livefish mode for pcie rshim driver. */
-  if (!strncmp(bd->dev_name, "pcie", 4) && strncmp(bd->dev_name + 4, "-lf", 3))
-    return false;
-
-  /*
-   * A value of 1 in yu_boot.boot_status indicates a successful FW
-   * boot, any other value indicates livefish mode.
-   */
-  rc = rshim_mmio_read32(bd, RSHIM_YU_BASE_ADDR + YU_BOOT, &yu_boot);
-  boot_status = (yu_boot >> 17) & 3;
-  RSHIM_DBG("yu_boot_status: %d\n", boot_status);
-
-  return (!rc && boot_status != 1);
-}
-
-
 /*
  * Write to the RShim reset control register.
  */
@@ -661,7 +640,7 @@ int rshim_reset_control(rshim_backend_t *bd)
   int rc;
 
   rc = bd->read_rshim(bd, RSHIM_CHANNEL, bd->regs->reset_control, &reg, RSHIM_REG_SIZE_8B);
-  if (rc < 0) {
+  if (rc < 0 || RSHIM_BAD_CTRL_REG(reg)) {
     RSHIM_ERR("failed to read rshim reset control error %d\n", rc);
     return rc;
   }
@@ -685,13 +664,6 @@ int rshim_reset_control(rshim_backend_t *bd)
     return rc;
   }
 
-  if (bd->ver_id == RSHIM_BLUEFIELD_2 && bd->rev_id == BLUEFIELD_REV0 &&
-      rshim_is_livefish(bd)) {
-    RSHIM_DBG("Apply reset type 13\n");
-    /* yu.reset_mode_control.reset_mode_control.sw_reset_event_activation13 */
-    rshim_mmio_write32(bd, RSHIM_YU_BASE_ADDR + YU_RESET_ACTIVATION_13, 1);
-  }
-
   return 0;
 }
 
@@ -705,6 +677,12 @@ int rshim_boot_open(rshim_backend_t *bd)
     RSHIM_INFO("rshim is in drop mode\n");
     pthread_mutex_unlock(&bd->mutex);
     return -EINVAL;
+  }
+
+  if (bd->locked_mode) {
+    RSHIM_ERR("rshim is in locked mode\n");
+    pthread_mutex_unlock(&bd->mutex);
+    return -EPERM;
   }
 
   if (bd->is_boot_open) {
@@ -786,15 +764,14 @@ int rshim_boot_open(rshim_backend_t *bd)
 boot_open_done:
   rshim_ref(bd);
 
-  /*
-   * PCIe doesn't have the disconnect/reconnect behavior.
-   * Add a small delay for the reset.
-   */
+  /* Add a small delay for the reset (livefish needs more delay). */
+  if (!bd->has_reprobe)
+    usleep((bd->type == RSH_BACKEND_PCIE_LF) ? 1000000 : 500000);
+  pthread_mutex_unlock(&bd->mutex);
+
   if (!bd->has_reprobe)
     sleep(bd->reset_delay);
-
   time(&bd->boot_write_time);
-  pthread_mutex_unlock(&bd->mutex);
 
   return 0;
 }
@@ -952,11 +929,18 @@ static int rshim_fifo_tx_avail(rshim_backend_t *bd)
   return avail;
 }
 
-static int rshim_fifo_sync(rshim_backend_t *bd)
+int rshim_fifo_sync(rshim_backend_t *bd, bool drop_rx)
 {
   rshim_tmfifo_msg_hdr_t hdr;
   int i, avail, rc;
+  time_t t0, t1;
+  uint64_t reg;
 
+  /* Clear pending network Rx/Tx state. */
+  bd->net_rx_len = 0;
+  bd->net_tx_len = 0;
+
+  /* Sync the Tx FIFO by sending padding zeros. */
   avail = rshim_fifo_tx_avail(bd);
   if (avail < 0)
     return avail;
@@ -970,6 +954,35 @@ static int rshim_fifo_sync(rshim_backend_t *bd)
                          hdr.data, RSHIM_REG_SIZE_8B);
     if (rc)
       return rc;
+  }
+
+  /* Drain the Rx FIFO until no more data in one second. */
+  if (drop_rx) {
+    avail = 0;
+
+    time(&t0);
+
+    do {
+      reg = 0;
+      rc = bd->read_rshim(bd, RSHIM_CHANNEL, bd->regs->tm_tth_sts, &reg, RSHIM_REG_SIZE_8B);
+      if (rc < 0 || RSHIM_BAD_CTRL_REG(reg))
+        break;
+
+      avail = reg & RSH_TM_TILE_TO_HOST_STS__COUNT_MASK;
+      if (avail == 0) {
+        time(&t1);
+        if (difftime(t1, t0) > 1)
+          break;
+        continue;
+      }
+
+      while (avail > 0) {
+        bd->read_rshim(bd, RSHIM_CHANNEL, bd->regs->tm_tth_data, &reg, RSHIM_REG_SIZE_8B);
+        avail--;
+      }
+
+      time(&t0);
+    } while (avail == 0);
   }
 
   return 0;
@@ -1375,10 +1388,13 @@ static void rshim_fifo_output(rshim_backend_t *bd)
   if (bd->spin_flags & RSH_SFLG_WRITING)
     return;
 
-  if (bd->has_reprobe)
-    fifo_avail = WRITE_BUF_SIZE;
-  else
-    fifo_avail = rshim_fifo_tx_avail(bd) * sizeof(uint64_t);
+  fifo_avail = rshim_fifo_tx_avail(bd) * sizeof(uint64_t);
+  if (fifo_avail <= 0) {
+    bd->has_cons_work = 1;
+    rshim_work_signal(bd);
+    return;
+  }
+
   write_avail = fifo_avail - write_buf_next;
 
   if (!bd->write_buf_pkt_rem) {
@@ -1706,7 +1722,7 @@ static void rshim_work_handler(rshim_backend_t *bd)
     bd->spin_flags &= ~RSH_SFLG_WRITING;
     if (len == bd->fifo_work_buf_len) {
       pthread_cond_broadcast(&bd->fifo_write_complete_cond);
-      rshim_notify(bd, RSH_EVENT_FIFO_OUTPUT, 0);
+      rshim_fifo_output(bd);
     } else {
       RSHIM_DBG("fifo_write: completed abnormally (%d)\n", len);
     }
@@ -1910,6 +1926,12 @@ int rshim_console_open(rshim_backend_t *bd)
     return -EBUSY;
   }
 
+  if (bd->locked_mode) {
+    RSHIM_ERR("rshim is in locked mode\n");
+    pthread_mutex_unlock(&bd->mutex);
+    return -EPERM;
+  }
+
   bd->is_cons_open = 1;
 
   pthread_mutex_lock(&bd->ringlock);
@@ -1948,11 +1970,9 @@ int rshim_notify(rshim_backend_t *bd, int event, int code)
 
   switch (event) {
   case RSH_EVENT_FIFO_INPUT:
-    rshim_fifo_input(bd);
-    break;
-
   case RSH_EVENT_FIFO_OUTPUT:
-    rshim_fifo_output(bd);
+    bd->has_cons_work = 1;
+    rshim_work_signal(bd);
     break;
 
   case RSH_EVENT_FIFO_ERR:
@@ -1964,7 +1984,7 @@ int rshim_notify(rshim_backend_t *bd, int event, int code)
 
     /* Sync-up the tmfifo if reprobe is not supported. */
     if (!bd->has_reprobe && bd->has_rshim)
-      rshim_fifo_sync(bd);
+      rshim_fifo_sync(bd, false);
 
     __sync_synchronize();
     bd->is_attach = 1;
@@ -2049,9 +2069,111 @@ rshim_backend_t *rshim_find_by_dev(void *dev)
   return NULL;
 }
 
-/* House-keeping timer. */
-static void rshim_timer_func(rshim_backend_t *bd)
+int rshim_set_drop_mode(rshim_backend_t *bd, int value)
 {
+  int old_value;
+  int rt = 0;
+
+  pthread_mutex_lock(&bd->mutex);
+  old_value = (int)bd->drop_mode;
+  value = !!value;
+  if (value == old_value) {
+    pthread_mutex_unlock(&bd->mutex);
+    return -EALREADY;
+  }
+
+  bd->drop_mode = 0;
+  if (bd->enable_device && bd->enable_device(bd, value ? false : true))
+    bd->drop_mode = 1;
+  else
+    bd->drop_mode = value;
+
+  if (bd->drop_mode)
+    bd->drop_pkt = 1;
+  else
+    rshim_fifo_sync(bd, true);
+  pthread_mutex_unlock(&bd->mutex);
+  /*
+   * Check if another endpoint driver has already attached to the
+   * same rshim device before enabling it.
+   */
+  if (!bd->drop_mode) {
+    rshim_lock();
+    pthread_mutex_lock(&bd->mutex);
+    if (rshim_access_check(bd)) {
+      RSHIM_WARN("rshim%d is not accessible\n", bd->index);
+      bd->drop_mode = 1;
+      rt = -EACCES;
+    }
+    pthread_mutex_unlock(&bd->mutex);
+    rshim_unlock();
+  }
+  return rt;
+}
+
+static int rshim_check_locked_mode(rshim_backend_t *bd)
+{
+    int rc;
+    uint64_t value = 0;
+
+    rc = bd->read_rshim(bd, RSHIM_CHANNEL, bd->regs->scratchpad1, &value,
+                        RSHIM_REG_SIZE_8B);
+    if (rc < 0 || RSHIM_BAD_CTRL_REG(value)) {
+        RSHIM_DBG("RSHIM %d SCRATCHPAD1 register read error\n", bd->index);
+        return -EIO;
+    }
+
+    return (value == BF3_RSH_SECURE_NIC_MODE_MAGIC_NUM) ? 1 : 0;
+}
+
+static int rshim_update_locked_mode(rshim_backend_t *bd)
+{
+  int locked_mode;
+
+  /* Only do this for PCIE. */
+  if (bd->type != RSH_BACKEND_PCIE)
+    return 0;
+
+  /* Skip locked-mode polling during reset. */
+  if (bd->is_booting)
+    return 0;
+
+  pthread_mutex_lock(&bd->mutex);
+  locked_mode = rshim_check_locked_mode(bd);
+  pthread_mutex_unlock(&bd->mutex);
+  if (locked_mode < 0)
+    return -EIO;
+
+  if (locked_mode != bd->locked_mode) {
+    RSHIM_INFO("rshim%d set to %s mode\n", bd->index,
+        locked_mode ? "locked" : "unlocked");
+    bd->locked_mode = locked_mode;
+
+    /*
+     * When NIC has exited locked mode, other rshim driver like BMC USB rshim
+     * driver may have attached RSHIM. In that case, we will enter drop mode
+     */
+    if (!locked_mode) {
+      int rt;
+
+      rshim_lock();
+      pthread_mutex_lock(&bd->mutex);
+      rt = rshim_access_check(bd); 
+      pthread_mutex_unlock(&bd->mutex);
+      rshim_unlock();
+      if (rt) {
+        RSHIM_INFO("rshim%d attached by another device. Entering Drop Mode\n",
+            bd->index);
+        rshim_set_drop_mode(bd, 1);
+      }
+    }
+  }
+
+  return 0;
+}
+
+/* House-keeping timer. */
+static void rshim_timer_func(rshim_backend_t *bd) {
   int period = rshim_keepalive_period;
 
   if (bd->has_cons_work)
@@ -2062,7 +2184,14 @@ static void rshim_timer_func(rshim_backend_t *bd)
     bd->keepalive = 1;
     bd->last_keepalive = rshim_timer_ticks;
     rshim_work_signal(bd);
+
+    /* Piggy-back the keepalive update for locked mode update as well */
+    rshim_update_locked_mode(bd);
   }
+
+  /* Some checking for PCIe backend. */
+  if (bd->type == RSH_BACKEND_PCIE)
+    rshim_pcie_check(bd);
 
   bd->timer = rshim_timer_ticks + period;
 }
@@ -2140,82 +2269,6 @@ static void rshim_boot_workaround_check(rshim_backend_t *bd)
   }
 }
 
-static int rshim_bf2_a0_wa(rshim_backend_t *bd)
-{
-  uint32_t devid = 0, clk_en, reset_en, powerdown;
-  uint32_t main_clk_gate_en;
-  int i, rc;
-
-  rc = rshim_mmio_read32(bd, RSHIM_YU_BASE_ADDR + YU_BOOT_DEVID, &devid);
-  RSHIM_DBG("yu_boot_devid: 0x%x\n", devid);
-  if (rc)
-    return -1;
-
-  /* Workaround applies only to rev A0 in livefish mode */
-  if ((devid >> 16) > 0)
-    return 0;
-
-  RSHIM_INFO("Apply reset_mode_control WA\n");
-  if (rshim_mmio_read32(bd, RSHIM_YU_BASE_ADDR +
-                        YU_MAIN_CLK_GATE_EN, &main_clk_gate_en))
-    return -1;
-
-  main_clk_gate_en |= (1 << 13);
-  if (rshim_mmio_write32(bd, RSHIM_YU_BASE_ADDR + YU_MAIN_CLK_GATE_EN,
-                         main_clk_gate_en))
-    return -1;
-  RSHIM_DBG("main_clk_gate_en: 0x%x\n", main_clk_gate_en);
-
-  /*
-   * yu.reset_mode_control.reset_modes.reset_mode[13].clk_en_bits[i].clk_en_bits =
-   *   yu.reset_mode_control.reset_modes.reset_mode[8].clk_en_bits[i].clk_en_bits
-   */
-  for (i = 0; i < YU_CLK_EN_COUNT; ++i) {
-    if (rshim_mmio_read32(bd, RSHIM_YU_BASE_ADDR + YU_RESET_8_CLK_EN +
-                          (i * 4), &clk_en))
-      return -1;
-    if (rshim_mmio_write32(bd, RSHIM_YU_BASE_ADDR + YU_RESET_13_CLK_EN +
-                           (i * 4), clk_en))
-      return -1;
-  }
-
-  /*
-   * yu.reset_mode_control.reset_modes.reset_mode[13].reset_en_bits[i].reset_en_bits =
-   *   yu.reset_mode_control.reset_modes.reset_mode[8].reset_en_bits[i].reset_en_bits
-   */
-  for (i = 0; i < YU_RESET_EN_COUNT; ++i) {
-    if (rshim_mmio_read32(bd, RSHIM_YU_BASE_ADDR + YU_RESET_8_RESET_EN +
-                          (i * 4), &reset_en))
-      return -1;
-    if (rshim_mmio_write32(bd, RSHIM_YU_BASE_ADDR + YU_RESET_13_RESET_EN +
-                           (i * 4), reset_en))
-      return -1;
-  }
-
-  /*
-   * yu.reset_mode_control.reset_modes.reset_mode[13].powerdown_bits[i].powerdown_bits =
-   *   yu.reset_mode_control.reset_modes.reset_mode[8].powerdown_bits[i].powerdown_bits
-   */
-  for (i = 0; i < YU_POWERDOWN_COUNT; ++i) {
-    if (rshim_mmio_read32(bd, RSHIM_YU_BASE_ADDR + YU_RESET_8_POWERDOWN +
-                          (i * 4), &powerdown))
-      return -1;
-    if (rshim_mmio_write32(bd, RSHIM_YU_BASE_ADDR + YU_RESET_13_POWERDOWN +
-                           (i * 4), powerdown))
-      return -1;
-  }
-
-  /*
-   * yu.bootrecord.nic.power.power_clock_up_delay = 0x9
-   * yu.bootrecord.nic.power.power_clock_down_delay = 0x9
-   */
-  if (rshim_mmio_write32(bd, RSHIM_YU_BASE_ADDR + YU_POWER_CLK_DELAY,
-                         0x9 | (0x9 << 5)))
-      return -1;
-
-  return 0;
-}
-
 int rshim_access_check(rshim_backend_t *bd)
 {
   rshim_backend_t *other_bd;
@@ -2240,23 +2293,6 @@ int rshim_access_check(rshim_backend_t *bd)
   }
 
   rshim_boot_workaround_check(bd);
-
-  /* BLUEFIELD_2 REV0 workaround. */
-  if (bd->ver_id == RSHIM_BLUEFIELD_2 && bd->rev_id == BLUEFIELD_REV0 &&
-      rshim_is_livefish(bd)) {
-    if (rshim_bf2_a0_wa(bd) != 0) {
-      /*
-       * If the workaround fails it is likely because the mesh is already
-       * stuck. Issue a soft reset and try one more time. Ignore the error code
-       * since it's not reliable when doing reset.
-       */
-      bd->write_rshim(bd, RSHIM_CHANNEL, bd->regs->reset_control,
-                      RSH_RESET_CONTROL__RESET_CHIP_VAL_KEY,
-                      RSHIM_REG_SIZE_8B);
-      sleep(1);
-      rshim_bf2_a0_wa(bd);
-    }
-  }
 
   /* Write value 0 to RSH_SCRATCHPAD1. */
   rc = bd->write_rshim(bd, RSHIM_CHANNEL, bd->regs->scratchpad1, 0, RSHIM_REG_SIZE_8B);
@@ -2295,7 +2331,7 @@ int rshim_access_check(rshim_backend_t *bd)
 
   /* One more read to make sure it's ready. */
   rc = bd->read_rshim(bd, RSHIM_CHANNEL, bd->regs->scratchpad1, &value, RSHIM_REG_SIZE_8B);
-  if (rc < 0) {
+  if (rc < 0 || RSHIM_BAD_CTRL_REG(value)) {
     RSHIM_ERR("access_check: failed to read rshim\n");
     return -ENODEV;
   }
@@ -2576,10 +2612,10 @@ static void rshim_main(int argc, char *argv[])
   if (!rshim_backend_name && rshim_static_dev_name) {
     if (!strncmp(rshim_static_dev_name, "usb", 3))
       rshim_backend_name = "usb";
+    else if (!strncmp(rshim_static_dev_name, "pcie-lf", 7))
+      rshim_backend_name = "pcie-lf";
     else if (!strncmp(rshim_static_dev_name, "pcie", 4))
       rshim_backend_name = "pcie";
-    else if (!strncmp(rshim_static_dev_name, "pcie_lf", 7))
-      rshim_backend_name = "pcie_lf";
   }
   if (!rshim_backend_name) {
     rshim_pcie_init();
@@ -2587,10 +2623,10 @@ static void rshim_main(int argc, char *argv[])
   } else {
     if (!strcmp(rshim_backend_name, "usb"))
       rc = rshim_usb_init(epoll_fd);
+    else if (!strcmp(rshim_backend_name, "pcie-lf"))
+      rc = rshim_pcie_lf_init();
     else if (!strcmp(rshim_backend_name, "pcie"))
       rc = rshim_pcie_init();
-    else if (!strcmp(rshim_backend_name, "pcie_lf"))
-      rc = rshim_pcie_lf_init();
   }
   if (rc) {
     RSHIM_ERR("failed to initialize rshim backend\n");
@@ -2898,7 +2934,7 @@ static void print_help(void)
   printf("Usage: rshim [options]\n");
   printf("\n");
   printf("OPTIONS:\n");
-  printf("  -b, --backend     backend name (usb, pcie or pcie_lf)\n");
+  printf("  -b, --backend     backend name (usb, pcie or pcie-lf)\n");
   printf("  -d, --device      device to attach\n");
   printf("  -f, --foreground  run in foreground\n");
   printf("  -i, --index       use device path /dev/rshim<i>/\n");

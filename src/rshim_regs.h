@@ -166,6 +166,7 @@
 #define RSH_FABRIC_DIM 0x0110
 
 // Mustang-specific registers' addresses, masks, shifts
+#define BF3_RSH_ADDR_MASK 0x10000000
 #define BF3_RSH_BASE_ADDR 0x13000000
 #define BF3_RSH_BOOT_FIFO_DATA 0x2000
 #define BF3_RSH_BOOT_FIFO_COUNT 0x1000
@@ -190,6 +191,7 @@
 #define BF3_RSH_ARM_WDG_CONTROL_WCS 0x0000
 #define BF3_RSH_SCRATCH_BUF_DAT 0x0610
 #define BF3_RSH_SCRATCH_BUF_CTL 0x0600
+#define BF3_RSH_SECURE_NIC_MODE_MAGIC_NUM 0x4B434F4C00000000ULL     /* "LOCK" */
 
 #endif /* !defined(__DOXYGEN__) */
 #endif /* !defined(__RSHIM_REGS_H__) */
