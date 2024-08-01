@@ -27,12 +27,13 @@
 # of the authors and should not be interpreted as representing official policies,
 # either expressed or implied, of the FreeBSD Project.
 
-#
-# Configurations
-#
-
 DEBUG=${DEBUG:-0}                             # Debug mode
+BF_REG=$(dirname $0)/bf-reg
 RSHIM_PIPE="/tmp/rshim_pipe"
+LOG_FILE="/tmp/bfb-install.log"
+
+run_cmd_local_ready=0     # whether run_cmd* local functions are ready to use
+run_cmd_remote_ready=0    # whether run_cmd* remote functions are ready to use
 
 usage ()
 {
@@ -45,6 +46,7 @@ usage ()
   echo "  -m, --remote-mode <mode>       Remote mode to use (scp, nc, ncpipe)."
   echo "  -r, --rshim <device>           Rshim device, format [<ip>:<port>:]rshim<N>."
   echo "  -R, --reverse-nc               Reverse netcat mode."
+  echo "  -u, --runtime                  Runtime upgrade (BF3 + local rshim only)."
   echo "  -v, --verbose                  Enable verbose output."
 }
 
@@ -165,15 +167,41 @@ get_local_ip()
   echo $local_ip
 }
 
+clear_boot_fifo()
+{
+  local cnt
+
+  while true; do
+    # Read BOOT_FIFO_DATA if BOOT_FIFO_COUNT != 0
+    cnt=`${BF_REG} $(basename ${rshim_node}) 0x13001000.64 | awk '{print $3}'`
+    cnt=$((cnt))
+    [ $cnt -eq 0 ] && break
+    ${BF_REG} $(basename ${rshim_node}) 0x13002000.64 >/dev/null
+  done
+}
+
 # Push the boot stream to rshim via local rshim
-#
-# Global variables used:
-#   $bfb, $cfg, $rootfs, $pv, $rshim_node, $sudo_prefix
 push_boot_stream_via_local_rshim()
 {
   # Push the boot stream to local rshim
   echo "Pushing bfb${cfg:+ + cfg}${rootfs:+ + rootfs}"
+
+  if [ $runtime -eq 1 ]; then
+    # Skip reset when pushing bfb
+    echo "BOOT_RESET_SKIP 1" > ${rshim_node}/misc
+    # Clear the current boot fifo
+    clear_boot_fifo
+    # Set SP2.BIT2=1
+    ${BF_REG} $(basename ${rshim_node}) 0x13000c48.64 0x4 >/dev/null
+    # Set SWINT2.BIT2
+    ${BF_REG} $(basename ${rshim_node}) 0x13000318.64 0x4 >/dev/null
+  fi
+
   $sudo_prefix sh -c "cat ${bfb} ${cfg:+$cfg} ${rootfs:+${rootfs}} ${pv:+| ${pv} | cat -} > ${rshim_node}/boot"
+
+  if [ $runtime -eq 1 ]; then
+    echo "BOOT_RESET_SKIP 0" > ${rshim_node}/misc
+  fi
 }
 
 # Push the boot stream to rshim via remote rshim with scp
@@ -342,16 +370,62 @@ push_boot_stream()
   fi
 }
 
+check_nic_mode()
+{
+  local str
+
+  [ "$mode" != "local" ] && return
+
+  # Get PCIE BDF
+  str=`cat ${rshim_node}/misc | grep DEV_NAME | awk '{print $2}'`
+  str=${str:5}
+  str=${str/.*/.0}
+  pcie_bdf="$str"
+
+  # Check NIC mode
+  str=`mlxconfig -d $pcie_bdf -e q INTERNAL_CPU_OFFLOAD_ENGINE 2>/dev/null | grep INTERNAL_CPU_OFFLOAD_ENGINE | awk '{print $(NF-1)}'`
+  if [ ."$str" = ."DISABLED(1)" ]; then
+    is_nic_mode=1
+  else
+    is_nic_mode=0
+  fi
+}
+
 # Wait for RSHIM to finish updating by monitoring keywords in the RSHIM log
 #
 # Global variables used:
 #   $mode, $rshim_node, $remote_mode
 wait_for_update_to_finish()
 {
+  # 'filter0' indicates bfb installation completion, thus CLEAR_ON_READ
+  # can be disabled for next boot. 'filter' is related to specific mode
+  # which might include extra configuration or booting, and is used as
+  # the exit condition of the bfb-install script.
+  local filter0 filter
+
+  filter0="Reboot|finished|DPU is ready|Linux up"
+  if [ $runtime -eq 0 ]; then
+    filter0="$filter0|In Enhanced NIC mode"
+  else
+    filter0="Runtime upgrade finished"
+  fi
+
+  if [ $is_nic_mode -eq 1 ]; then
+    filter="In Enhanced NIC mode"
+  else
+    filter="$filter0"
+  fi
+
   echo "Collecting BlueField booting status. Press Ctrl+C to stop…"
+
+  # Enable CLEAR_ON_READ, so rshim log will be cleared after read.
+  run_cmd_exit $mode "echo 'CLEAR_ON_READ 1' > ${rshim_node}/misc"
 
   # Set display level to 2 to show more information
   run_cmd_exit $mode "echo 'DISPLAY_LEVEL 2' > ${rshim_node}/misc"
+
+  # Create log file with date
+  echo "# $(date)" > ${LOG_FILE}
 
   last=""
   finished=0
@@ -363,15 +437,18 @@ wait_for_update_to_finish()
 
     sleep 1
 
-    if echo ${cur} | grep -Ei \
-      "Reboot|finished|DPU is ready|In Enhanced NIC mode|Linux up" \
-        >/dev/null; then
+    if echo ${cur} | grep -Ei "$filter" >/dev/null; then
       finished=1
+    fi
+
+    if echo ${cur} | grep -Ei "$filter0" >/dev/null; then
+      # Disable CLEAR_ON_READ.
+      run_cmd_exit $mode "echo 'CLEAR_ON_READ 0' > ${rshim_node}/misc"
     fi
 
     # Overwrite if current length smaller than previous length.
     if [ ${last_len} -eq 0 -o ${last_len} -gt ${cur_len} ]; then
-        echo "${cur}" | sed '/^[[:space:]]*$/d'
+        echo "${cur}" | sed '/^[[:space:]]*$/d' | tee -a ${LOG_FILE}
       last="${cur}"
       continue
     fi
@@ -379,7 +456,7 @@ wait_for_update_to_finish()
     # Overwrite if first portion does not match.
     sub_cur=$(echo "${cur}" | dd bs=1 count=${last_len} 2>/dev/null)
     if [ "${sub_cur}" != "${last}" ]; then
-      echo "${cur}" | sed '/^[[:space:]]*$/d'
+      echo "${cur}" | sed '/^[[:space:]]*$/d' | tee -a ${LOG_FILE}
       last="${cur}"
       continue
     fi
@@ -391,16 +468,17 @@ wait_for_update_to_finish()
 
     # Print the diff.
     echo "${cur}" | dd bs=1 skip=${last_len} 2>/dev/null | \
-      sed '/^[[:space:]]*$/d'
+      sed '/^[[:space:]]*$/d' | tee -a ${LOG_FILE}
+
     last="${cur}"
   done
+
+  # Disable CLEAR_ON_READ.
+  run_cmd_exit $mode "echo 'CLEAR_ON_READ 0' > ${rshim_node}/misc"
 }
 
 # Clean up function whenever the script exits
 # shellcheck disable=SC2317
-#
-# Global variables used:
-#  $cleanup_started, $remote_mode
 cleanup() {
   # prevent cleanup from being called multiple times
   if [ "$cleanup_started" -eq 1 ]; then
@@ -424,6 +502,30 @@ cleanup() {
       run_cmd remote "rm -f $RSHIM_PIPE"
     fi
   fi
+
+  if [ $runtime -eq 1 ]; then
+    # Reset to default state.
+    echo "BOOT_RESET_SKIP 0" > ${rshim_node}/misc
+
+    # Cleanup SP2.BIT2 and trigger SWINT2.
+    sp2=`${BF_REG} $(basename ${rshim_node}) 0x13000c48.64 | awk '{print $3}'`
+    sp2=$((sp2 & ~4))
+    ${BF_REG} $(basename ${rshim_node}) 0x13000c48.64 $sp2 >/dev/null
+    ${BF_REG} $(basename ${rshim_node}) 0x13000318.64 0x4 >/dev/null
+  fi
+
+  # Disable CLEAR_ON_READ.
+  if [ $mode == "local" ] && [ $run_cmd_local_ready -eq 1 ]; then
+    run_cmd_exit local "echo 'CLEAR_ON_READ 0' > ${rshim_node}/misc"
+  fi
+  if [ $mode == "remote" ] && [ $run_cmd_remote_ready -eq 1 ]; then
+    run_cmd_exit remote "echo 'CLEAR_ON_READ 0' > ${rshim_node}/misc"
+  fi
+
+  # Bind driver back for NIC mode.
+  if [ $is_nic_mode -eq 1 -a -n "$pcie_bdf" ]; then
+    echo "$pcie_bdf" > /sys/bus/pci/drivers/mlx5_core/bind
+  fi
 }
 
 
@@ -438,6 +540,7 @@ rootfs=
 mode=local        # Values can be local or remote
 remote_mode=      # Values can be scp, nc, or ncpipe
 rshim=            # rshim device string, format [<ip>:<port>:]rshim<N>
+runtime=0         # Values can be 0 or 1.
 verbose=0         # Values can be 0 or 1.
 reverse_nc=0      # Values can be 0 or 1.
 
@@ -448,11 +551,11 @@ port=
 cleanup_started=0
 trap cleanup EXIT INT TERM
 
-run_cmd_local_ready=0     # whether run_cmd* local functions are ready to use
-run_cmd_remote_ready=0    # whether run_cmd* remote functions are ready to use
+is_nic_mode=0     # Flag to indicate whether DPU in NIC mod or not
+pcie_bdf=""       # PCIE BDF
 
-options=`getopt -n bfb-install -o b:c:f:hm:r:Rv \
-        -l bfb:,config:,rootfs:,help,remote-mode:,rshim:,reverse-nc,verbose \
+options=`getopt -n bfb-install -o b:c:f:hm:r:Ruv \
+        -l bfb:,config:,rootfs:,help,remote-mode:,rshim:,reverse-nc,runtime,verbose \
         -- "$@"`
 if [ $? != 0 ]; then echo "Command line error" >&2; exit 1; fi
 eval set -- $options
@@ -465,6 +568,7 @@ while [ "$1" != -- ]; do
     --remote-mode|-m) shift; remote_mode=$1 ;;
     --rshim|-r) shift; rshim=$1 ;;
     --reverse-nc|-R) reverse_nc=1 ;;
+    --runtime|-u) runtime=1 ;;
     --verbose|-v) verbose=1 ;;
     --) shift; break;;
     *) echo "Error: Invalid argument: $1" >&2; usage >&2; exit 1 ;;
@@ -517,6 +621,9 @@ if echo "$rshim" | grep -q ':'; then
 else
   # Local mode, rshim_node is directly the value of rshim
   rshim_node=$rshim
+
+  # Adjust log file to be per rshim
+  LOG_FILE=${LOG_FILE%.*}-$(basename $rshim_node).log
 fi
 
 # We don't allow remote modes for local rshim
@@ -627,9 +734,9 @@ if [ $mode == "remote" ]; then
   run_cmd_exit local "nc -z $ip 22" \
     "Error: Remote does not have SSH server running"
 
-  echo "Checking if Remote has root SSH access..."
-  if ! ssh root@$ip "$check_root_cmd"; then
-    echo "Error: Remote does not have root SSH access"
+  echo "Checking if Remote has password-less root SSH access..."
+  if ! ssh -o BatchMode=yes -o ConnectTimeout=5 root@$ip "exit"; then
+    echo "Error: Remote does not have password-less (public key authentication) root SSH access"
     exit 1
   fi
 
@@ -671,6 +778,11 @@ if [ -z "${pv}" ]; then
   echo "Warn: 'pv' command not found. Continue without showing BFB progress."
 fi
 
+# Check NIC mode and unbind mlx5_core driver in NIC mode.
+check_nic_mode
+if [ $is_nic_mode -eq 1 -a -n "$pcie_bdf" ]; then
+  echo "$pcie_bdf" > /sys/bus/pci/drivers/mlx5_core/unbind 2>/dev/null
+fi
 push_boot_stream
 
 wait_for_update_to_finish
