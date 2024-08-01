@@ -1,3 +1,9 @@
+rshim-user-space (2.0.38+debian-1) unstable; urgency=medium
+
+  * New upstream version 2.0.38+debian
+
+ -- Taihsiang Ho (tai271828) <e@tai271828.me>  Thu, 01 Aug 2024 17:36:09 +0200
+
 rshim-user-space (2.0.31+debian-1) unstable; urgency=medium
 
   * New upstream version 2.0.31+debian
