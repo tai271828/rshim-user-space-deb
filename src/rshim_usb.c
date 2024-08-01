@@ -922,10 +922,12 @@ static int rshim_usb_probe_one(libusb_context *ctx, libusb_device *usb_dev,
 
   /* Notify that device is attached. */
   rc = rshim_notify(bd, RSH_EVENT_ATTACH, 0);
-  pthread_mutex_unlock(&bd->mutex);
-  if (rc)
+  if (rc) {
+    pthread_mutex_unlock(&bd->mutex);
     goto error;
+  }
 
+  pthread_mutex_unlock(&bd->mutex);
   rshim_unlock();
   return 0;
 

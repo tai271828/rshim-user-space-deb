@@ -52,9 +52,11 @@ make
 %{__install} -d %{buildroot}%{_mandir}/man8
 %{__install} -m 0644 man/rshim.8 %{buildroot}%{_mandir}/man8
 %{__install} -m 0644 man/bfb-install.8 %{buildroot}%{_mandir}/man8
+%{__install} -m 0644 man/bf-reg.8 %{buildroot}%{_mandir}/man8
 %{__install} -d %{buildroot}%{_sysconfdir}
 %{__install} -m 0644 etc/rshim.conf %{buildroot}%{_sysconfdir}
 %{__install} -m 0755 scripts/bfb-install %{buildroot}%{_sbindir}
+%{__install} -m 0755 scripts/bf-reg %{buildroot}%{_sbindir}
 
 %pre
 %if "%{with_systemd}" == "1"
@@ -93,10 +95,41 @@ fi
 %endif
 %{_sbindir}/rshim
 %{_sbindir}/bfb-install
+%{_sbindir}/bf-reg
 %{_mandir}/man8/rshim.8.gz
 %{_mandir}/man8/bfb-install.8.gz
+%{_mandir}/man8/bf-reg.8.gz
 
 %changelog
+* Fri Jul 26 2024 Penghe Geng <pgeng@nvidia.com> - 2.0.38
+- Make sending the initial force command a one-time event
+- bfb-install: adjust the log file to be per rshim
+
+* Tue Jul 16 2024 Penghe Geng <pgeng@nvidia.com> - 2.0.37
+- add missing --force in help menu
+
+* Mon Jul 15 2024 Penghe Geng <pgeng@nvidia.com> - 2.0.36
+- Allow /dev/rshim<N> devfs creation only with --force option enabled
+- bfb-install: fix for NIC mode
+- bfb-install: Exit with error if running remote bfb-install without
+  password-less root SSH
+- Fix compiling issue for FreeBSD
+
+* Fri Jul 05 2024 Penghe Geng <pgeng@nvidia.com> - 2.0.35
+- Add ownership transfer feature (primarily via "FORCE_CMD")
+- bfb-install: enhancement for NIC mode
+
+* Tue Jun 11 2024 Liming Sun <limings@nvidia.com> - 2.0.34
+- bfb-install: Enable CLEAR_ON_READ
+- bfb-install: add cleanup code for runtime update
+
+* Thu Jun 06 2024 Liming Sun <limings@nvidia.com> - 2.0.33
+- misc: add 'CLEAR_ON_READ' command
+- bfb-install: add runtime image support
+
+* Tue Jun 04 2024 Liming Sun <limings@nvidia.com> - 2.0.32
+- bf3/pcie_lf: Fix the 4B access via MSN GW
+
 * Fri May 17 2024 Liming Sun <limings@nvidia.com> - 2.0.31
 - bf3/pcie_lf: support register read/write via /dev/rshim0/rshim
 - Only poll/check locked mode for PCIe backend
