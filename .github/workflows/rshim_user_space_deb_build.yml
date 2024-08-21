@@ -1,0 +1,26 @@
+name: build-deb-and-autopkgtest
+
+on:
+  push:
+  pull_request:
+
+env:
+  # in 2024 Aug, Github Action provides 4 cores / 16G memory / 19G disk
+  # see "default github action resource" below
+  RELEASE: "sid"
+  CPU: "2"
+  MEMORY: "8GB"
+  DISK: "16GB"
+  USERNAME_IN_LXC: "tai"
+
+jobs:
+  VERIFICATION_01_LOCAL_ENV_Build_Deb_in_LXD_VM:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Variables
+        uses: ./.github/workflows/01_set_variables
+
+      - name: Launch VM Instance and Build Deb
+        uses: ./.github/workflows/02_launch_vm_instance
+
