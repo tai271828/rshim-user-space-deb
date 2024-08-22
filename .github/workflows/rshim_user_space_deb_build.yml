@@ -24,3 +24,25 @@ jobs:
       - name: Launch VM Instance and Build Deb
         uses: ./.github/workflows/02_launch_vm_instance
 
+      - name: Get Ready to Setup Testbed
+        run: |
+          # begin to setup autopkgtest
+          lxc exec ${VM} -- su --login ${USERNAME_IN_LXC} -c "sudo apt update"
+          lxc exec ${VM} -- su --login ${USERNAME_IN_LXC} -c "sudo apt install -y autopkgtest"
+
+      - name: Setup Testbed - Autopkgtest Local Env
+        run: |
+          echo "We will run autopkgtest in the local environment directly so no additional setup is needed."
+
+      - name: Run Test - Autopkgtest Local Env
+        run: |
+          # start testing with autopkgtest
+          lxc exec ${VM} -- su --login ${USERNAME_IN_LXC} -c "cd /home/${USERNAME_IN_LXC}/${REPO_NAME} ; sudo autopkgtest -B ./ --apt-upgrade -- null"
+
+      - name: Functional Testing
+        run: |
+          lxc exec ${VM} -- bash -c "ls /home/${USERNAME_IN_LXC}/"
+          lxc exec ${VM} -- bash -c "apt install -y /home/${USERNAME_IN_LXC}/rshim_*_amd64.deb"
+
+          lxc exec ${VM} -- systemctl is-active rshim
+
