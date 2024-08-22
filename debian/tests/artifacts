@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+systemctl is-active rshim
+
+for path in "/lib/systemd/system/rshim.service" "/etc/rshim.conf" "/usr/sbin/rshim"
+do
+  ls $path
+done
+
