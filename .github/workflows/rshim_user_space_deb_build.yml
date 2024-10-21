@@ -45,7 +45,12 @@ jobs:
       - name: Functional Testing
         run: |
           lxc exec ${VM} -- bash -c "ls /home/${USERNAME_IN_LXC}/"
-          lxc exec ${VM} -- bash -c "apt install -y /home/${USERNAME_IN_LXC}/rshim_*_amd64.deb"
+          # For some reasons, the autopkgtest -B above install rshim already.
+          # Maybe something wrong with my control file or the bug of
+          # autopkgtest itself? Either way, I should not assume it is installed
+          # always. Instead, let me ensure I will install the built binary
+          # package everytime so I can test it.
+          lxc exec ${VM} -- bash -c "apt install -y --allow-downgrades /home/${USERNAME_IN_LXC}/rshim_*_amd64.deb"
 
           lxc exec ${VM} -- systemctl is-active rshim
 
