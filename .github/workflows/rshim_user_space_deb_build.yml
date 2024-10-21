@@ -44,8 +44,9 @@ jobs:
 
       - name: Functional Testing
         run: |
-          lxc exec ${VM} -- bash -c "ls /home/${USERNAME_IN_LXC}/"
-          lxc exec ${VM} -- bash -c "apt install -y /home/${USERNAME_IN_LXC}/rshim_*_amd64.deb"
-
+          # The built binary package should have been installed in the vm by
+          # autopkgtest if the previous stage of Autopkgtest Local Env ended
+          # successfully, so let's try to play with the installed package
+          # directly.
           lxc exec ${VM} -- systemctl is-active rshim
 
